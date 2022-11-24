@@ -32,6 +32,20 @@ async function run() {
             const result = await usersCollection.insertOne(user)
             res.send(result)
         })
+
+        app.post('/products', async (req, res) => {
+
+            const userEmail = req.query.email;
+            const query = { email: userEmail }
+            const user = await usersCollection.findOne(query);
+            if (user.role !== "seller") {
+                return { message: "unauthorized user" }
+            }
+
+            const product = req.body;
+            const result = await productsCollection.insertOne(product)
+            res.send(result)
+        })
     }
     finally {
 
