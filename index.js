@@ -20,6 +20,17 @@ const productsCollection = client.db('mobihub').collection('products');
 
 async function run() {
     try {
+        app.get('/jwt', async (req, res) => {
+            const email = req.query.email;
+            const query = { email: email };
+            const user = await usersCollection.findOne(query)
+            if (user) {
+                const token = jwt.sign({ email }, process.env.ACCESS_TOKEN, { expiresIn: '10d' });
+                return res.send({ accessToken: token })
+            }
+            res.status(401).send({ accessToken: '' })
+        })
+
 
         app.get('/categories', async (req, res) => {
             const categories = await categoriesCollection.find({}).toArray();
@@ -28,6 +39,11 @@ async function run() {
 
         app.post('/users', async (req, res) => {
             const user = req.body;
+            const query = { email: user.email };
+            const existingUser = await usersCollection.findOne(query);
+            if (existingUser) {
+                return res.send({ message: "user already existed." })
+            }
             console.log(user)
             const result = await usersCollection.insertOne(user)
             res.send(result)
@@ -39,7 +55,7 @@ async function run() {
             const query = { email: userEmail }
             const user = await usersCollection.findOne(query);
             if (user.role !== "seller") {
-                return { message: "unauthorized user" }
+                return res.send({ message: "unauthorized user" })
             }
 
             const product = req.body;
