@@ -54,7 +54,6 @@ async function run() {
 
         app.get('/users/admin/:email', verifyJWT, async (req, res) => {
             const email = req.params.email;
-            console.log(email)
             const query = { email: email }
             const user = await usersCollection.findOne(query);
             res.send({ isAdmin: user?.role === 'admin' })
@@ -62,7 +61,6 @@ async function run() {
 
         app.get('/users/seller/:email', verifyJWT, async (req, res) => {
             const email = req.params.email;
-            console.log(email)
             const query = { email: email }
             const user = await usersCollection.findOne(query);
             res.send({ isSeller: user?.role === 'seller' })
@@ -80,8 +78,15 @@ async function run() {
             res.send(result)
         })
 
-        app.post('/products', verifyJWT, async (req, res) => {
+        app.get('/products/:id', verifyJWT, async (req, res) => {
+            id = req.params.id;
+            console.log(id)
+            const query = { categoryId: id }
+            const result = await productsCollection.find(query).toArray();
+            res.send(result);
+        })
 
+        app.post('/products', verifyJWT, async (req, res) => {
             const userEmail = req.query.email;
             const query = { email: userEmail }
             const user = await usersCollection.findOne(query);
