@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
+const jwt = require('jsonwebtoken');
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const app = express();
 const port = process.env.PORT || 5000;
@@ -13,10 +14,24 @@ app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ihoeb4c.mongodb.net/?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true, serverApi: ServerApiVersion.v1 });
-
 const categoriesCollection = client.db('mobihub').collection('productcategories');
 const usersCollection = client.db('mobihub').collection('users');
 const productsCollection = client.db('mobihub').collection('products');
+
+function verifyJWT(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+        return res.status(401).send('Unauthorized access')
+    }
+    const token = authHeader.split(' ')[1];
+    jwt.verify(token, process.env.ACCESS_TOKEN, function (err, decoded) {
+        if (err) {
+            return res.status(403).send('forbidden access')
+        }
+        req.decoded = decoded;
+        next()
+    })
+}
 
 async function run() {
     try {
@@ -37,6 +52,22 @@ async function run() {
             res.send(categories)
         })
 
+        app.get('/users/admin/:email', verifyJWT, async (req, res) => {
+            const email = req.params.email;
+            console.log(email)
+            const query = { email: email }
+            const user = await usersCollection.findOne(query);
+            res.send({ isAdmin: user?.role === 'admin' })
+        })
+
+        app.get('/users/seller/:email', verifyJWT, async (req, res) => {
+            const email = req.params.email;
+            console.log(email)
+            const query = { email: email }
+            const user = await usersCollection.findOne(query);
+            res.send({ isSeller: user?.role === 'seller' })
+        })
+
         app.post('/users', async (req, res) => {
             const user = req.body;
             const query = { email: user.email };
@@ -49,12 +80,12 @@ async function run() {
             res.send(result)
         })
 
-        app.post('/products', async (req, res) => {
+        app.post('/products', verifyJWT, async (req, res) => {
 
             const userEmail = req.query.email;
             const query = { email: userEmail }
             const user = await usersCollection.findOne(query);
-            if (user.role !== "seller") {
+            if (user?.role !== "seller") {
                 return res.send({ message: "unauthorized user" })
             }
 
