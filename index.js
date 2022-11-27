@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const stripe = require("stripe")(process.env.STRIPE_SK)
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -18,6 +19,8 @@ const categoriesCollection = client.db('mobihub').collection('productcategories'
 const usersCollection = client.db('mobihub').collection('users');
 const productsCollection = client.db('mobihub').collection('products');
 const bookedProductsCollection = client.db('mobihub').collection('bookedProducts');
+const paymentsCollection = client.db('mobihub').collection('payments');
+const wishlistCollection = client.db('mobihub').collection('wishlist');
 
 function verifyJWT(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -64,6 +67,23 @@ async function run() {
                 return res.send({ accessToken: token })
             }
             res.status(401).send({ accessToken: '' })
+        })
+
+
+        app.post('/create-payment-intent', verifyJWT, async (req, res) => {
+            const booking = req.body;
+            const amount = parseInt(booking.price) * 100;
+            console.log(amount)
+            const paymentIntent = await stripe.paymentIntents.create({
+                currency: "usd",
+                amount: amount,
+                "payment_method_types": [
+                    "card"
+                ],
+            });
+            res.send({
+                clientSecret: paymentIntent.client_secret,
+            });
         })
 
 
@@ -117,7 +137,7 @@ async function run() {
             res.send(result);
         })
         app.get('/reported', verifyJWT, verifyAdmin, async (req, res) => {
-            const query = { reported: true };
+            const query = { reported: true, status: 'available' };
             const products = await productsCollection.find(query).toArray();
             console.log('reported', products)
             res.send(products)
@@ -138,7 +158,7 @@ async function run() {
         })
 
         app.get('/advertisedProducts', async (req, res) => {
-            const query = { advertised: true };
+            const query = { advertised: true, status: 'available' };
             const result = await productsCollection.find(query).toArray();
             res.send(result)
         })
@@ -185,15 +205,66 @@ async function run() {
             const query = { buyerEmail: product.buyerEmail, productId: product.productId }
             const alreadyBooked = await bookedProductsCollection.findOne(query);
             if (alreadyBooked) {
-                return res.send({ message: "can't book same product more than once" })
+                return res.send({ message: "You've Already Booked This Product" })
             }
             req.body.booked_at = new Date()
             const result = await bookedProductsCollection.insertOne(product)
+
+            // removing product from buyers wishlist
+            const wishListResult = await wishlistCollection.deleteOne(query);
+
             res.send(result)
         })
 
+        app.post('/payments', verifyJWT, async (req, res) => {
+            const payment = req.body;
+            const result = await paymentsCollection.insertOne(payment);
 
+            // marking as sold if anyone else booked the same product but didn't pay.
+            const filter = { productId: payment.productId }
+            const options = { upsert: true }
+            const updatedDoc = {
+                $set: {
+                    status: 'sold'
+                }
+            }
 
+            // marking as paid the booked product that buyer just paid for.
+            const allBookingResult = await bookedProductsCollection.updateMany(filter, updatedDoc, options)
+            const query = { _id: ObjectId(payment.bookingId) }
+            const updated = {
+                $set: {
+                    status: 'paid'
+                }
+            }
+            const bookingResult = await bookedProductsCollection.updateOne(query, updated, options);
+
+            // updating the sold product's status.
+            const productQuery = { _id: ObjectId(payment.productId) }
+            const updatedField = {
+                $set: {
+                    status: 'sold'
+                }
+            }
+            const productResult = await productsCollection.updateOne(productQuery, updatedField, options);
+
+            // updating product in wishList
+            const wishlistResult = await wishlistCollection.updateMany(filter, updatedDoc, options)
+
+            res.send(result)
+        })
+
+        app.post('/wishlist', verifyJWT, async (req, res) => {
+            const product = req.body;
+            const query = { productId: product.productId, buyerEmail: product.buyerEmail }
+            const alreadyAdded = await wishlistCollection.findOne(query);
+            if (alreadyAdded) {
+                return res.send({ message: "Product Is Already In Your Wishlist" })
+            }
+
+            const result = await wishlistCollection.insertOne(product)
+            res.send(result)
+        })
     }
 
     finally {
