@@ -43,6 +43,15 @@ async function verifySeller(req, res, next) {
     }
     next()
 }
+async function verifyAdmin(req, res, next) {
+    const userEmail = req.query.email;
+    const query = { email: userEmail }
+    const user = await usersCollection.findOne(query);
+    if (user?.role !== "admin") {
+        return res.status(401).send({ message: "unauthorized user" })
+    }
+    next()
+}
 
 async function run() {
     try {
@@ -74,7 +83,8 @@ async function run() {
             const email = req.params.email;
             const query = { email: email }
             const user = await usersCollection.findOne(query);
-            res.send({ isSeller: user?.role === 'seller', isVerified: user?.verified === true })
+            const isVerified = user.verified;
+            res.send({ isSeller: user?.role === 'seller', isVerified })
         })
 
         app.post('/users', async (req, res) => {
@@ -88,14 +98,30 @@ async function run() {
             res.send(result)
         })
 
+        app.get('/buyers', verifyJWT, verifyAdmin, async (req, res) => {
+            const query = { role: "buyer" };
+            const buyers = await usersCollection.find(query).toArray();
+            res.send(buyers)
+        })
+        app.get('/sellers', verifyJWT, verifyAdmin, async (req, res) => {
+            const query = { role: "seller" };
+            const sellers = await usersCollection.find(query).toArray();
+            res.send(sellers)
+        })
+
         app.get('/products/:id', verifyJWT, async (req, res) => {
             id = req.params.id;
-            const query = { categoryId: id }
+            const query = { categoryId: id, status: 'available' }
             const options = { sort: { posted_at: -1 } }
             const result = await productsCollection.find(query, options).toArray();
             res.send(result);
         })
-
+        app.get('/reported', verifyJWT, verifyAdmin, async (req, res) => {
+            const query = { reported: true };
+            const products = await productsCollection.find(query).toArray();
+            console.log('reported', products)
+            res.send(products)
+        })
         app.get('/SellerProducts', verifyJWT, verifySeller, async (req, res) => {
             const email = req.query.email;
             const query = { sellerEmail: email }
@@ -139,14 +165,28 @@ async function run() {
 
         app.get('/booked', verifyJWT, async (req, res) => {
             const email = req.query.email;
+            console.log()
             const query = { buyerEmail: email }
             const options = { sort: { booked_at: -1 } }
             const products = await bookedProductsCollection.find(query, options).toArray();
             res.send(products)
         })
 
+        app.get('/booked/:id', verifyJWT, async (req, res) => {
+            const id = req.params.id;
+            console.log(id)
+            const query = { _id: ObjectId(id) };
+            const product = await bookedProductsCollection.findOne(query)
+            res.send(product);
+        })
+
         app.post('/booked', verifyJWT, async (req, res) => {
             const product = req.body;
+            const query = { buyerEmail: product.buyerEmail, productId: product.productId }
+            const alreadyBooked = await bookedProductsCollection.findOne(query);
+            if (alreadyBooked) {
+                return res.send({ message: "can't book same product more than once" })
+            }
             req.body.booked_at = new Date()
             const result = await bookedProductsCollection.insertOne(product)
             res.send(result)
