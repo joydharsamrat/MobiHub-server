@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -17,6 +17,7 @@ const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology:
 const categoriesCollection = client.db('mobihub').collection('productcategories');
 const usersCollection = client.db('mobihub').collection('users');
 const productsCollection = client.db('mobihub').collection('products');
+const bookedProductsCollection = client.db('mobihub').collection('bookedProducts');
 
 function verifyJWT(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -31,6 +32,16 @@ function verifyJWT(req, res, next) {
         req.decoded = decoded;
         next()
     })
+}
+
+async function verifySeller(req, res, next) {
+    const userEmail = req.query.email;
+    const query = { email: userEmail }
+    const user = await usersCollection.findOne(query);
+    if (user?.role !== "seller") {
+        return res.status(401).send({ message: "unauthorized user" })
+    }
+    next()
 }
 
 async function run() {
@@ -63,7 +74,7 @@ async function run() {
             const email = req.params.email;
             const query = { email: email }
             const user = await usersCollection.findOne(query);
-            res.send({ isSeller: user?.role === 'seller' })
+            res.send({ isSeller: user?.role === 'seller', isVerified: user?.verified === true })
         })
 
         app.post('/users', async (req, res) => {
@@ -73,32 +84,78 @@ async function run() {
             if (existingUser) {
                 return res.send({ message: "user already existed." })
             }
-            console.log(user)
             const result = await usersCollection.insertOne(user)
             res.send(result)
         })
 
         app.get('/products/:id', verifyJWT, async (req, res) => {
             id = req.params.id;
-            console.log(id)
             const query = { categoryId: id }
-            const result = await productsCollection.find(query).toArray();
+            const options = { sort: { posted_at: -1 } }
+            const result = await productsCollection.find(query, options).toArray();
             res.send(result);
         })
 
-        app.post('/products', verifyJWT, async (req, res) => {
-            const userEmail = req.query.email;
-            const query = { email: userEmail }
-            const user = await usersCollection.findOne(query);
-            if (user?.role !== "seller") {
-                return res.send({ message: "unauthorized user" })
-            }
+        app.get('/SellerProducts', verifyJWT, verifySeller, async (req, res) => {
+            const email = req.query.email;
+            const query = { sellerEmail: email }
+            const options = { sort: { posted_at: -1 } }
+            const products = await productsCollection.find(query, options).toArray()
+            res.send(products)
+        })
 
+        app.post('/products', verifyJWT, verifySeller, async (req, res) => {
             const product = req.body;
+            req.body.posted_at = new Date()
             const result = await productsCollection.insertOne(product)
             res.send(result)
         })
+
+        app.get('/advertisedProducts', async (req, res) => {
+            const query = { advertised: true };
+            const result = await productsCollection.find(query).toArray();
+            res.send(result)
+        })
+
+        app.put('/products/advertised/:id', verifyJWT, verifySeller, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const options = { upsert: true };
+            const updatedDoc = {
+                $set: {
+                    advertised: true
+                }
+            }
+            const result = await productsCollection.updateOne(query, updatedDoc, options);
+            res.send(result)
+        })
+
+        app.delete('/products/:id', verifyJWT, verifySeller, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const result = await productsCollection.deleteOne(query)
+            res.send(result)
+        })
+
+        app.get('/booked', verifyJWT, async (req, res) => {
+            const email = req.query.email;
+            const query = { buyerEmail: email }
+            const options = { sort: { booked_at: -1 } }
+            const products = await bookedProductsCollection.find(query, options).toArray();
+            res.send(products)
+        })
+
+        app.post('/booked', verifyJWT, async (req, res) => {
+            const product = req.body;
+            req.body.booked_at = new Date()
+            const result = await bookedProductsCollection.insertOne(product)
+            res.send(result)
+        })
+
+
+
     }
+
     finally {
 
     }
