@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { query } = require('express');
 const stripe = require("stripe")(process.env.STRIPE_SK)
 const app = express();
 const port = process.env.PORT || 5000;
@@ -72,8 +73,7 @@ async function run() {
 
         app.post('/create-payment-intent', verifyJWT, async (req, res) => {
             const booking = req.body;
-            const amount = parseInt(booking.price) * 100;
-            console.log(amount)
+            const amount = parseInt(booking?.price) * 100;
             const paymentIntent = await stripe.paymentIntents.create({
                 currency: "usd",
                 amount: amount,
@@ -92,6 +92,13 @@ async function run() {
             res.send(categories)
         })
 
+        app.get('/users', verifyJWT, async (req, res) => {
+            const email = req.query.email;
+            const query = { email: email };
+            const user = await usersCollection.findOne(query)
+            res.send(user)
+        })
+
         app.get('/users/admin/:email', verifyJWT, async (req, res) => {
             const email = req.params.email;
             const query = { email: email }
@@ -103,18 +110,40 @@ async function run() {
             const email = req.params.email;
             const query = { email: email }
             const user = await usersCollection.findOne(query);
-            const isVerified = user.verified;
+            const isVerified = user?.verified;
             res.send({ isSeller: user?.role === 'seller', isVerified })
         })
 
         app.post('/users', async (req, res) => {
             const user = req.body;
-            const query = { email: user.email };
+            const query = { email: user?.email };
             const existingUser = await usersCollection.findOne(query);
             if (existingUser) {
                 return res.send({ message: "user already existed." })
             }
             const result = await usersCollection.insertOne(user)
+            res.send(result)
+        })
+
+        app.delete('/users/:email', verifyJWT, verifyAdmin, async (req, res) => {
+            const email = req.params.email;
+            const query = { email: email };
+            const result = await usersCollection.deleteOne(query)
+
+            // remove products
+            const productsQuery = { sellerEmail: email }
+            const productsResult = await productsCollection.deleteMany(productsQuery)
+
+            // delete bookings 
+            const bookingsQuery = { $or: [{ seller: email }, { buyerEmail: email }] };
+            const bookingResult = await bookedProductsCollection.deleteMany(bookingsQuery);
+
+            // remove wishlist 
+            const wishlistQuery = { $or: [{ sellerEmail: email }, { buyerEmail: email }] };
+            const wishlistResult = await wishlistCollection.deleteMany(wishlistQuery);
+
+
+
             res.send(result)
         })
 
@@ -129,19 +158,49 @@ async function run() {
             res.send(sellers)
         })
 
+        app.put('/sellers/verified/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const updatedDoc = {
+                $set: {
+                    verified: 'verified'
+                }
+            }
+            const options = { upsert: true }
+            const result = await usersCollection.updateOne(query, updatedDoc, options)
+            res.send(result)
+        })
+
         app.get('/products/:id', verifyJWT, async (req, res) => {
-            id = req.params.id;
+            const id = req.params.id;
             const query = { categoryId: id, status: 'available' }
             const options = { sort: { posted_at: -1 } }
             const result = await productsCollection.find(query, options).toArray();
             res.send(result);
         })
         app.get('/reported', verifyJWT, verifyAdmin, async (req, res) => {
-            const query = { reported: true, status: 'available' };
-            const products = await productsCollection.find(query).toArray();
-            console.log('reported', products)
+            const query = { $and: [{ reported: true }, { status: 'available' }] };
+            const options = { sort: { reported_at: -1 } }
+            const products = await productsCollection.find(query, options).toArray();
             res.send(products)
         })
+
+        app.put('/reported/:id', verifyJWT, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) };
+            const updatedDoc = {
+                $set: {
+                    reported: true
+                },
+                $setOnInsert: { reported_at: new Date() }
+
+            }
+            const options = { upsert: true }
+
+            const result = await productsCollection.updateOne(query, updatedDoc, options);
+            res.send(result)
+        })
+
         app.get('/SellerProducts', verifyJWT, verifySeller, async (req, res) => {
             const email = req.query.email;
             const query = { sellerEmail: email }
@@ -158,7 +217,7 @@ async function run() {
         })
 
         app.get('/advertisedProducts', async (req, res) => {
-            const query = { advertised: true, status: 'available' };
+            const query = { $and: [{ advertised: true }, { status: 'available' }] };
             const result = await productsCollection.find(query).toArray();
             res.send(result)
         })
@@ -185,7 +244,6 @@ async function run() {
 
         app.get('/booked', verifyJWT, async (req, res) => {
             const email = req.query.email;
-            console.log()
             const query = { buyerEmail: email }
             const options = { sort: { booked_at: -1 } }
             const products = await bookedProductsCollection.find(query, options).toArray();
@@ -194,7 +252,6 @@ async function run() {
 
         app.get('/booked/:id', verifyJWT, async (req, res) => {
             const id = req.params.id;
-            console.log(id)
             const query = { _id: ObjectId(id) };
             const product = await bookedProductsCollection.findOne(query)
             res.send(product);
@@ -202,7 +259,7 @@ async function run() {
 
         app.post('/booked', verifyJWT, async (req, res) => {
             const product = req.body;
-            const query = { buyerEmail: product.buyerEmail, productId: product.productId }
+            const query = { $and: [{ buyerEmail: product.buyerEmail }, { productId: product.productId }] }
             const alreadyBooked = await bookedProductsCollection.findOne(query);
             if (alreadyBooked) {
                 return res.send({ message: "You've Already Booked This Product" })
@@ -212,8 +269,22 @@ async function run() {
 
             // removing product from buyers wishlist
             const wishListResult = await wishlistCollection.deleteOne(query);
-
             res.send(result)
+        })
+
+        app.delete('/booked', verifyJWT, async (req, res) => {
+            const email = req.query.buyerEmail;
+            const product = req.query.productId;
+            const query = { $and: [{ productId: product }, { buyerEmail: email }] }
+            const result = await bookedProductsCollection.deleteOne(query)
+            res.send(result)
+        })
+
+        app.get('/payments', verifyJWT, verifySeller, async (req, res) => {
+            const email = req.query.email;
+            const query = { seller: email }
+            const buyers = await paymentsCollection.find(query).toArray();
+            res.send(buyers)
         })
 
         app.post('/payments', verifyJWT, async (req, res) => {
@@ -254,15 +325,34 @@ async function run() {
             res.send(result)
         })
 
+        app.get('/wishlist', verifyJWT, async (req, res) => {
+            const email = req.query.email;
+            const query = { buyerEmail: email }
+            const product = await wishlistCollection.find(query).toArray()
+            res.send(product)
+        })
+
         app.post('/wishlist', verifyJWT, async (req, res) => {
             const product = req.body;
-            const query = { productId: product.productId, buyerEmail: product.buyerEmail }
+            const query = { $and: [{ productId: product.productId }, { buyerEmail: product.buyerEmail }] }
             const alreadyAdded = await wishlistCollection.findOne(query);
             if (alreadyAdded) {
                 return res.send({ message: "Product Is Already In Your Wishlist" })
             }
-
+            // already booked 
+            const alreadyBooked = await bookedProductsCollection.findOne(query)
+            if (alreadyBooked) {
+                return res.send({ message: "You've already booked this product" })
+            }
             const result = await wishlistCollection.insertOne(product)
+            res.send(result)
+        })
+
+        app.delete('/wishlist', verifyJWT, async (req, res) => {
+            const buyerEmail = req.query.buyerEmail;
+            const productId = req.query.productId;
+            const query = { $and: [{ productId: productId }, { buyerEmail: buyerEmail }] }
+            const result = await wishlistCollection.deleteOne(query)
             res.send(result)
         })
     }
