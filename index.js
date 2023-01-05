@@ -171,7 +171,7 @@ async function run() {
             res.send(result)
         })
 
-        app.get('/products/:id', verifyJWT, async (req, res) => {
+        app.get('/products/:id', async (req, res) => {
             const id = req.params.id;
             const query = { categoryId: id, status: 'available' }
             const options = { sort: { posted_at: -1 } }
